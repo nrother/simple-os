@@ -13,7 +13,7 @@
 #define SPACE_REPORTING 1 //enable SPACE_REPORTING to have access to getStackSpaceLeft()
 
 #include <Arduino.h>
-#include "SimpleOS.h"
+#include <SimpleOS.h>
 
 createTask(test_restart)
 {
@@ -39,8 +39,7 @@ createTask(blink_led)
 		if(cnt >= 10)
 		{
 			cnt = 0;
-			//restartTask(2);
-			restartTask(test_restart);
+			restartTask(2); //this will make task 2 to start again from the beginning
 		}
 		
 		PORTA ^= 0xFF;
