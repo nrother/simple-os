@@ -34,7 +34,6 @@
 
 //TODO: More comments!
 //TOOO: InsertLoopTask or something...
-//TODO: Make createTask include a loop
 
 typedef void (*taskFunction)(); //declare a type called threadFunction that is a function pointer to a void, no arguments function
 typedef byte TaskStack; //declare taskStack as an alias for byte (which is an alias for uint_8)
@@ -76,18 +75,26 @@ int getStackUsed(byte taskId);
 				const uint16_t taskStackSize_##name = stackSize;\
 				TaskStack taskStack_##name[stackSize] __attribute__ ((section (".noinit")));\
 				TaskInfo task_##name;\
-				void name() //TODO: Create loop around the function (with yield()?)
+				inline void taskFn_##name() __attribute__((always_inline));\
+				 __attribute__((noreturn)) void name()\
+				{\
+					while(true)\
+					{\
+						taskFn_##name();\
+						yield();\
+					}\
+				}\
+				void taskFn_##name()
 //the id is needed to address the correct slot in the array, I'd really like to remove that...
 #define insertTask(id, name) \
 				tasks[id] = &task_##name;\
-				insertTaskInternal(id, name, taskStack_##name, taskStackSize_##name)
+				_insertTask(id, name, taskStack_##name, taskStackSize_##name)
 
 ///////////////////////////////////////////////////////////////////////////////
 // Implementation (no CPP file, so that we can use #defines from the sketch) //
 ///////////////////////////////////////////////////////////////////////////////
 
-//TODO: Rename to "_insertTask"?
-void insertTaskInternal(byte taskId, taskFunction function, TaskStack* stack, uint16_t stackSize)
+void _insertTask(byte taskId, taskFunction function, TaskStack* stack, uint16_t stackSize)
 {
 	tasks[taskId]->taskId = taskId;
 	tasks[taskId]->flags = NEED_INIT;
