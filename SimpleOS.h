@@ -24,9 +24,17 @@
 #define STACK_SIZE 150
 #endif
 
+#ifndef SPACE_REPORTING
+#define SPACE_REPORTING 0
+#endif
+
 #define NEED_INIT 0x1
 #define SLEEPING 0x2
 #define PAUSED 0x4
+
+//TODO: More comments!
+//TOOO: InsertLoopTask or something...
+//TODO: Make createTask include a loop
 
 typedef void (*taskFunction)(); //declare a type called threadFunction that is a function pointer to a void, no arguments function
 typedef byte TaskStack; //declare taskStack as an alias for byte (which is an alias for uint_8)
@@ -38,6 +46,10 @@ struct TaskInfo //represents all necessary information about a single task
 	byte flags;
 	unsigned long wakeupTime;
 	taskFunction function; //function pointer
+	#if SPACE_REPORTING
+	TaskStack* stackStart; //we need the start of the stack to find out, how many bytes where overwritten
+	uint16_t stackSize; //and we need the size
+	#endif
 };
 
 TaskInfo* currentTask; //the active task
@@ -53,6 +65,9 @@ byte getCurrentTaskId();
 void restartTask(byte taskId);
 void sleep(long ms);
 void yield() __attribute__ ((naked)); //don't generate prologue/epilogue, we will save registers ourself
+#if SPACE_REPORTING
+int getStackUsed(byte taskId);
+#endif
 
 //macros that simplify the creation of tasks
 #define createTask(name) createTaskWithStackSize(name, STACK_SIZE)
@@ -61,7 +76,7 @@ void yield() __attribute__ ((naked)); //don't generate prologue/epilogue, we wil
 				const uint16_t taskStackSize_##name = stackSize;\
 				TaskStack taskStack_##name[stackSize] __attribute__ ((section (".noinit")));\
 				TaskInfo task_##name;\
-				void name()
+				void name() //TODO: Create loop around the function (with yield()?)
 //the id is needed to address the correct slot in the array, I'd really like to remove that...
 #define insertTask(id, name) \
 				tasks[id] = &task_##name;\
@@ -71,12 +86,17 @@ void yield() __attribute__ ((naked)); //don't generate prologue/epilogue, we wil
 // Implementation (no CPP file, so that we can use #defines from the sketch) //
 ///////////////////////////////////////////////////////////////////////////////
 
+//TODO: Rename to "_insertTask"?
 void insertTaskInternal(byte taskId, taskFunction function, TaskStack* stack, uint16_t stackSize)
 {
 	tasks[taskId]->taskId = taskId;
 	tasks[taskId]->flags = NEED_INIT;
 	tasks[taskId]->stackPointer = (uint16_t)stack + stackSize - 1; //point to last element in stack
 	tasks[taskId]->function = function;
+	#if SPACE_REPORTING
+	tasks[taskId]->stackSize = stackSize;
+	tasks[taskId]->stackStart = stack;
+	#endif
 }
 
 void pauseTask(byte taskId)
@@ -111,8 +131,43 @@ void restartTask(byte taskId)
 	tasks[taskId]->flags |= NEED_INIT; //restarting a task is as simple as setting this flag
 }
 
+#if SPACE_REPORTING
+int getStackUsed(byte taskId)
+{
+	//run over the complete stack, look for the first untouched "0x55"
+	for (uint16_t i = tasks[taskId]->stackSize - 1; i >= 0; i--)
+	{
+		if(*(tasks[taskId]->stackStart + i) == 0x55)
+			return tasks[taskId]->stackSize - i;
+	}
+	//stack used completely (or even overused):
+	return 0;
+}
+
+int getStackSize(byte taskId)
+{
+	return tasks[taskId]->stackSize;
+}
+
+float getStackUsedPercentage(byte taskId)
+{
+	return ((float)getStackUsed(taskId) / getStackSize(taskId)) * 100.0f;
+}
+#endif
+
 void startMultitasking()
 {
+	#if SPACE_REPORTING
+	//run over each task's stack and fill it with 0x55 for getStackUsed()
+	for (byte i = 0; i < TASK_COUNT; i++)
+	{
+		for (uint16_t j = 0; j < tasks[i]->stackSize; j++)
+		{
+			*(tasks[i]->stackStart + j) = 0x55;
+		}
+	}
+	#endif
+	
 	//save the SREG state here
 	newTaskSREG = SREG;
 	
