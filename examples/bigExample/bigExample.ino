@@ -35,9 +35,9 @@ createTask(blink_led)
 			restartTask(2); //this will make task 2 to start again from the beginning
 		}
 		
-		Serial.println("Task 1");
+		Serial.println("T1");
 		
-		sleep(5); //pause this task for 5ms, pass the control to another task
+		sleep(10); //pause this task for 10ms, pass the control to another task
 		//IMPORTANT: Don't use delay(), this will block the CPU, sleep allows others tasks to run in the spare time
 	}
 }
@@ -47,25 +47,30 @@ createTask(test_restart)
 	while(true)
 	{
 		int a = 0;
-		while(a < 50)
+		while(a < 10)
 		{
 			yield();
 			a++;
 		}
 		//this line will never be reached, because the task is restarted before!
-		PORTC ^= 0xFF;
+		Serial.println("failed!");
 	}
 }
 
+int led = 13;
+
 createTaskWithStackSize(blink_led2, 40) //don't make the stack much smaller that this, about 35 byte are needed by the OS!
 {
-	Serial.println("Task 2");
-	//there is no loop and no call to yield here, tasks will be automatically wrapped into while(true) { task(); yield() } !
+	digitalWrite(led, LOW);
+	delay(20); //We use delay here because of the very short delay, but in general use sleep()!
+	digitalWrite(led, HIGH);
+	delay(20);
 }
 
 void setup()
 {	
 	Serial.begin(9600);
+	pinMode(led, OUTPUT);
 	
 	insertTask(0, blink_led); //only the name of the task, NOT "blink_led()" (don't call the function, pass its name!)
 	insertTask(1, blink_led2);

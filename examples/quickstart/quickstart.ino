@@ -20,14 +20,14 @@
 //TASK_COUNT specifies how many tasks you like to handle
 #include <SimpleOS.h>
 
-int led = 13; //this is an build-in led on most boards
+int led = 13; //pin 13 is an build-in led on most boards
 
 createTask(blink)
 {
 	digitalWrite(led, HIGH);   // turn the LED on (HIGH is the voltage level)
-	sleep(1000);               // wait for a second
+	sleep(500);                // wait for half a second
 	digitalWrite(led, LOW);    // turn the LED off by making the voltage LOW
-	sleep(1000);               // wait for a second
+	sleep(500);                // wait for half a second
 	//DONT USE DELAY! Use sleep() instead of delay()!
 	//Using delay will block the complete sketch, sleep allows others
 	//tasks to execute in the meantime!
@@ -36,13 +36,13 @@ createTask(blink)
 createTask(say_hello)
 {
 	Serial.println("hi!");
-	sleep(5000); //waits for 5sec. Dont use delay here!
+	sleep(3000); //waits for 3 sec. Dont use delay here!
 }
 
 void setup()
 {
 	Serial.begin(9600);
-	pinMode(13, OUTPUT);
+	pinMode(led, OUTPUT); //set the led pin to output
 	
 	//we need specify each task here, or it won't get excuted.
 	//make sure, you have exactly as many tasks, as you specified
