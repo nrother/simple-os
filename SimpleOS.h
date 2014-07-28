@@ -21,29 +21,26 @@
 #endif
 
 #ifndef STACK_SIZE
-#define STACK_SIZE 150
+#define STACK_SIZE 150 //default value
 #endif
 
 #ifndef SPACE_REPORTING
-#define SPACE_REPORTING 0
+#define SPACE_REPORTING 0 //default value
 #endif
 
 #define NEED_INIT 0x1
 #define SLEEPING 0x2
 #define PAUSED 0x4
 
-//TODO: More comments!
-//TOOO: InsertLoopTask or something...
-
-typedef void (*taskFunction)(); //declare a type called threadFunction that is a function pointer to a void, no arguments function
+typedef void (*taskFunction)(); //declare a type called taskFunction that is a function pointer to a void, non arguments function
 typedef byte TaskStack; //declare taskStack as an alias for byte (which is an alias for uint_8)
 
 struct TaskInfo //represents all necessary information about a single task
 {
-	uint16_t stackPointer;
-	byte taskId;
-	byte flags;
-	unsigned long wakeupTime;
+	uint16_t stackPointer; //saved stack pointer
+	byte taskId; //id of the task
+	byte flags; //flags like NEED_INIT or PAUSED
+	unsigned long wakeupTime; //the time in ms when the SLEEPING flag will be cleared
 	taskFunction function; //function pointer
 	#if SPACE_REPORTING
 	TaskStack* stackStart; //we need the start of the stack to find out, how many bytes where overwritten
@@ -55,27 +52,29 @@ TaskInfo* currentTask; //the active task
 TaskInfo* tasks[TASK_COUNT]; //pointers to all task's TaskInfo
 uint8_t newTaskSREG; //the SREG when startMultitasking was called. Contains the interrupt state, will be replicated to all new tasks
 
-void startMultitasking() __attribute__ ((naked));
-void createTaskInternal(byte taskId, taskFunction function);
+//function prototypes
+void startMultitasking() __attribute__ ((naked, noreturn));
+void _insertTask(byte taskId, taskFunction function);
 void pauseTask(byte taskId);
 void unpauseTask(byte taskId);
 boolean isTaskPaused(byte taskId);
 byte getCurrentTaskId();
 void restartTask(byte taskId);
 void sleep(long ms);
-void yield() __attribute__ ((naked)); //don't generate prologue/epilogue, we will save registers ourself
+void yield() __attribute__ ((naked)); //we don't need any register-saving pro/epilogue here, so that function is naked
 #if SPACE_REPORTING
 int getStackUsed(byte taskId);
+int getStackSize(byte taskId);
+float getStackUsedPercentage(byte taskId);
 #endif
 
 //macros that simplify the creation of tasks
 #define createTask(name) createTaskWithStackSize(name, STACK_SIZE)
-//save the stack size as global constant for later use, will be optimized away. The stack can be in .noinit, zeroing it would take unnecessary time.
 #define createTaskWithStackSize(name, stackSize) \
-				const uint16_t taskStackSize_##name = stackSize;\
-				TaskStack taskStack_##name[stackSize] __attribute__ ((section (".noinit")));\
+				const uint16_t taskStackSize_##name = stackSize; /*save the stack size as global constant for later use, will be optimized away.*/\
+				TaskStack taskStack_##name[stackSize] __attribute__ ((section (".noinit"))); /*The stack can be in .noinit, zeroing it would take unnecessary time*/\
 				TaskInfo task_##name;\
-				inline void taskFn_##name() __attribute__((always_inline));\
+				inline void taskFn_##name() __attribute__((always_inline)); /*the "real" function, can be completely inlined to the "wrapper" function*/\
 				 __attribute__((noreturn)) void name()\
 				{\
 					while(true)\
@@ -106,26 +105,36 @@ void _insertTask(byte taskId, taskFunction function, TaskStack* stack, uint16_t 
 	#endif
 }
 
+//pauses the task until upauseTask() is called.
 void pauseTask(byte taskId)
 {
 	tasks[taskId]->flags |= PAUSED;
 }
 
+//unpauses a task pause using pauseTask()
 void unpauseTask(byte taskId)
 {
 	tasks[taskId]->flags &= ~PAUSED;
 }
 
+//returns true if a task is pauses, false otherwise
 boolean isTaskPaused(byte taskId)
 {
 	return tasks[taskId]->flags & PAUSED;
 }
 
+//returns the id of the currently executing task
 byte getCurrentTaskId()
 {
 	return currentTask->taskId;
 }
 
+//makes this task sleep for at least the given amount of
+//time. Please note: This function may halt the task for
+//a longer period of time, if the other tasks fail to 
+//call yield() often enough.
+//Use this function instead of delay()! Delay will not allow
+//other tasks to run, while this task waits!
 void sleep(long ms)
 {
 	currentTask->wakeupTime = millis() + ms;
@@ -133,12 +142,14 @@ void sleep(long ms)
 	yield();
 }
 
+//Make the given task to start again from the beginning
 void restartTask(byte taskId)
 {
 	tasks[taskId]->flags |= NEED_INIT; //restarting a task is as simple as setting this flag
 }
 
 #if SPACE_REPORTING
+//Returns the number of bytes of stack used by the given task.
 int getStackUsed(byte taskId)
 {
 	//run over the complete stack, look for the first untouched "0x55"
@@ -151,17 +162,21 @@ int getStackUsed(byte taskId)
 	return 0;
 }
 
+//Returns the size of the stack for the given task as specified
+//in createTask()
 int getStackSize(byte taskId)
 {
 	return tasks[taskId]->stackSize;
 }
 
+//Get the percentage of stack used by the given task.
 float getStackUsedPercentage(byte taskId)
 {
 	return ((float)getStackUsed(taskId) / getStackSize(taskId)) * 100.0f;
 }
 #endif
 
+//Starts the execution of task! This function will never return.
 void startMultitasking()
 {
 	#if SPACE_REPORTING
@@ -196,17 +211,26 @@ void startMultitasking()
 	);
 }
 
+//This function interrupts the current task and continues the execution
+//of (possible) another task. When this task is chosen to be the next
+//in execution (because another taks has called yield()), this function
+//will return.
 //Inspiration: http://www.avrfreaks.net/modules/FreaksArticles/files/14/Multitasking%20on%20an%20AVR.pdf
 void yield()
 {
+	//This whole function must be written very carefully.
+	//We use a lot of inline assembler here, and this
+	//is a naked function, so there is also no frame pointer
+	
+	//TODO: Are interrupts in yield problematic?
 	//save the context:
 	asm volatile (
-	"push r0			\n"
-	"in r0, __SREG__	\n"
-	//"cli				\n" //TODO: Are interrupts in yield problematic?
-	"push r0			\n"
-	"push r1			\n"
-	"clr r1				\n" //clear the r1 (assumed to be zero by compiler)
+	"push r0			\n" //save r0 to the stack
+	"in r0, __SREG__	\n" //save the SREG in r0
+	//"cli				\n" //s.a.
+	"push r0			\n" //save the SREG in r0 on the stack
+	"push r1			\n" //...and save the rest of the registers on the stack
+	"clr r1				\n" //clear r1 (assumed to be zero by compiler)
 	"push r2			\n"
 	"push r3			\n"
 	"push r4			\n"
@@ -237,7 +261,7 @@ void yield()
 	"push r29			\n"
 	"push r30			\n"
 	"push r31			\n"
-	"in r0, __SP_L__	\n" //save the stack pointer (16bit), to the address in x, incrementing x between the two bytes
+	"in r0, __SP_L__	\n" //save the stack pointer (16bit)
 	"st %a0+, r0		\n"
 	"in r0, __SP_H__	\n"
 	"st %a0+, r0		\n"
@@ -247,7 +271,7 @@ void yield()
 	
 	//switch to temp/default stack for this method (just the "normal" stack at top of the RAM). No need to save the previous value, we just start at the top
 	asm volatile (
-	"ldi r16, %0			\n" //this will destroy r16, but all registers have undefined value (for the compiler)
+	"ldi r16, %0			\n" //this will destroy r16, but all registers have unknown value (for the compiler)
 	"out __SP_H__, r16		\n"
 	"ldi r16, %1	\n"
 	"out __SP_L__, r16		\n"
@@ -257,10 +281,10 @@ void yield()
 	
 	while(1) //while we have no suitable process
 	{		
-		unsigned long time = millis();
+		unsigned long time = millis(); //function calls are no problem here, since we have a valid stack pointer now
 		
 		byte endTaskId = (currentTask->taskId + 1) % TASK_COUNT;
-		byte i = endTaskId; //do check the same process again!
+		byte i = endTaskId; //this is correct, this is a do...while loop!
 		do //do...while loop, don't check for the first time, because i == endTaskId for first iteration (intentionally!)
 		{
 			if(tasks[i]->flags & PAUSED)
@@ -291,30 +315,29 @@ void yield()
 	
 	if(currentTask->flags & NEED_INIT) //process is new, need special handling
 	{
-		currentTask->flags &= ~NEED_INIT;
+		currentTask->flags &= ~NEED_INIT; //remove the flag
 		asm volatile (
-		"ld r0, %a2+		\n"
+		"ld r0, %a2+		\n" //load the stack pointer
 		"out __SP_L__, r0	\n"
 		"ld r0, %a2+		\n"
 		"out __SP_H__, r0	\n"
-		"push %0			\n"
+		"push %0			\n" //push the function address to the stack
 		"push %1			\n"
 		"out __SREG__, %3	\n" //use the saved SREG as a starting point for the new task
-		"ret				\n" //this will start our first process
 		:
 		: "r" ((uint16_t)(currentTask->function) & 0xFF), "r" (((uint16_t)(currentTask->function) >> 8) & 0xFF), "e" (&(currentTask->stackPointer)), "r" (newTaskSREG)
 		);
 		
-		asm volatile("ret"); //return here, we don't want to pop anything!
+		asm volatile("ret"); //"return" to the new task we pushed on the stack
 	}
 	
-	//restore the context
+	//alread running task, restore the context
 	asm volatile (
-	"ld r0, %a0+		\n" //restore the stack pointer (16bit), from the address in pointer register, incrementing between the two bytes
+	"ld r0, %a0+		\n" //restore the stack pointer (16bit)
 	"out __SP_L__, r0	\n"
 	"ld r0, %a0+		\n"
 	"out __SP_H__, r0	\n"
-	"pop r31			\n"
+	"pop r31			\n" //pop all the registers
 	"pop r30			\n"
 	"pop r29			\n"
 	"pop r28			\n"
@@ -345,15 +368,14 @@ void yield()
 	"pop r3				\n"
 	"pop r2				\n"
 	"pop r1				\n"
-	"pop r0				\n"
-	"out __SREG__, r0	\n" //this will also restore the interrupt status!
-	"pop r0				\n"
+	"pop r0				\n" //the old SREG was pushed to the stack
+	"out __SREG__, r0	\n" //restore the SREG, this will also restore the interrupt status!
+	"pop r0				\n" //and pop off the real value of r0
 	:
 	: "e" (&(currentTask->stackPointer))
 	);
 	
-	//and return, but to where we came from...
-	asm volatile("ret");
+	asm volatile("ret"); //...and finally "return" to the task function!
 }
 
 #endif /* SIMPLE_OS_H_ */
